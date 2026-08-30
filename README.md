@@ -10,6 +10,23 @@ exported from your own logged-in browser** and talks to LinkedIn's internal
 through the community
 [`linkedin-api`](https://github.com/tomquirk/linkedin-api) package.
 
+**Live deployment:** <https://tross-production-c92a.up.railway.app>
+
+```bash
+curl "https://tross-production-c92a.up.railway.app/profile?url=https://www.linkedin.com/in/johndoe/"
+```
+
+Interactive docs are at
+[`/docs`](https://tross-production-c92a.up.railway.app/docs), and
+[`/health`](https://tross-production-c92a.up.railway.app/health) answers
+`{"status": "ok"}`.
+
+> The hosted instance runs on whatever LinkedIn session cookies were last
+> configured for it. Those expire — see
+> [Known limitations](#known-limitations) — and while they're stale `/profile`
+> returns an error even though the service itself is up. Running it locally
+> with your own freshly exported cookies is the reliable path.
+
 ---
 
 ## Read this first
@@ -136,7 +153,11 @@ inject both values as platform secrets instead of shipping a file.
 uvicorn main:app --reload
 ```
 
-Live at `http://127.0.0.1:8000`. If something looks wrong, `python diagnose.py`
+Live at `http://127.0.0.1:8000` — or skip all of the above and hit the hosted
+instance at `https://tross-production-c92a.up.railway.app`, bearing in mind it
+uses its own (possibly stale) cookies rather than yours.
+
+If something looks wrong, `python diagnose.py`
 walks the auth → session → endpoint chain and prints where it breaks (cookie
 *names* and status codes only, never values).
 
@@ -144,11 +165,20 @@ walks the auth → session → endpoint chain and prints where it breaks (cookie
 
 ## API documentation
 
+Two base URLs — the hosted deployment, and your own local server:
+
+| Environment | Base URL                                        |
+| ----------- | ----------------------------------------------- |
+| Hosted      | `https://tross-production-c92a.up.railway.app`   |
+| Local       | `http://127.0.0.1:8000`                         |
+
 FastAPI generates interactive docs from the same models the code uses:
 
-- Swagger UI — <http://127.0.0.1:8000/docs>
-- ReDoc — <http://127.0.0.1:8000/redoc>
-- OpenAPI schema — `http://127.0.0.1:8000/openapi.json`
+| | Hosted | Local |
+| --- | --- | --- |
+| Swagger UI | [`/docs`](https://tross-production-c92a.up.railway.app/docs) | <http://127.0.0.1:8000/docs> |
+| ReDoc | [`/redoc`](https://tross-production-c92a.up.railway.app/redoc) | <http://127.0.0.1:8000/redoc> |
+| OpenAPI schema | [`/openapi.json`](https://tross-production-c92a.up.railway.app/openapi.json) | `http://127.0.0.1:8000/openapi.json` |
 
 ### `GET /profile`
 
@@ -161,6 +191,10 @@ with or without a scheme, trailing slash, query string, or locale suffix, and
 a bare slug (`johndoe`) passed directly.
 
 ```bash
+# hosted
+curl "https://tross-production-c92a.up.railway.app/profile?url=https://www.linkedin.com/in/johndoe/"
+
+# local
 curl "http://127.0.0.1:8000/profile?url=https://www.linkedin.com/in/johndoe/"
 ```
 
@@ -371,8 +405,16 @@ failure make detection *more* likely, not less.
   password, or LinkedIn decides to rotate the session. When that happens every
   request returns `503 LINKEDIN_AUTH_FAILED` and there is **no recovery path in
   code** — by design, since there's no automated re-login. The fix is manual:
-  re-export both cookies from a logged-in browser into `.env` and restart the
-  server. Anything built on top of this API needs to expect that outage.
+  re-export both cookies from a logged-in browser into `.env` (or into the
+  hosted deployment's environment variables) and restart the server. Anything
+  built on top of this API needs to expect that outage.
+
+  Worth knowing: a stale session doesn't always surface as a clean `503`.
+  LinkedIn sometimes answers an unauthenticated Voyager call by redirecting to
+  the login page, which loops — `requests` gives up after 30 hops and the
+  service reports `502 LINKEDIN_UPSTREAM_ERROR` instead. Same root cause, same
+  fix. A redirect loop on *every* slug, including one you know doesn't exist,
+  is the tell: a working session returns `404` for a bad slug.
 - **It violates LinkedIn's Terms of Service.** Educational/challenge use only —
   see the warning at the top.
 - **Account bans are a real risk.** LinkedIn detects automated Voyager traffic
