@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 from linkedin_api import Linkedin
 from requests.cookies import RequestsCookieJar
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, TooManyRedirects
 
 logger = logging.getLogger("linkedin_profile_api")
 
@@ -288,6 +288,23 @@ def fetch_raw_profile(slug: str) -> dict[str, Any]:
         logger.exception("Upstream HTTP error fetching profile '%s'", slug)
         raise LinkedInUpstreamError(
             f"LinkedIn API request failed ({status}).", upstream_status=status
+        ) from exc
+    except TooManyRedirects as exc:
+        # An unauthenticated Voyager call isn't always answered with a 401:
+        # LinkedIn frequently redirects it to the login page instead, which
+        # then redirects onward until `requests` gives up. That is an auth
+        # failure wearing a transport-error costume, so report it as one —
+        # otherwise an expired cookie surfaces as an opaque 502 and sends
+        # people looking for a LinkedIn outage that isn't happening.
+        reset_client()
+        logger.warning(
+            "Voyager call for '%s' hit a redirect loop (login redirect); "
+            "treating as an expired session and evicting the cached client.",
+            slug,
+        )
+        raise LinkedInAuthError(
+            "LinkedIn redirected the Voyager request to a login page, which "
+            "means the session cookies are no longer valid."
         ) from exc
     except LinkedInError:
         raise

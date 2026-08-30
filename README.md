@@ -273,7 +273,7 @@ only when the failure actually came from LinkedIn.
 | `404` | `PROFILE_NOT_FOUND`       | omitted                     | Slug doesn't resolve, or isn't visible to this session                   |
 | `429` | `LINKEDIN_RATE_LIMITED`   | `429`                       | LinkedIn throttled the request                                           |
 | `502` | `LINKEDIN_UPSTREAM_ERROR` | LinkedIn's status, or `502` | Unexpected/unparseable payload, or a transient upstream/network failure   |
-| `503` | `LINKEDIN_AUTH_FAILED`    | `401`/`403`, or omitted     | LinkedIn rejected the session, or no cookies are configured              |
+| `503` | `LINKEDIN_AUTH_FAILED`    | `401`/`403`, or omitted     | LinkedIn rejected the session, redirected it to a login page, or no cookies are configured |
 | `500` | `INTERNAL_ERROR`          | omitted                     | Anything unanticipated — logged server-side with a stack trace           |
 
 Two things worth calling out:
@@ -283,9 +283,11 @@ Two things worth calling out:
   which makes the service temporarily unavailable to everyone. LinkedIn's own
   status is reported separately as `upstream_status`, and omitted entirely when
   the cookies are simply missing (nothing upstream was contacted).
-- **A `401`/`403` also evicts the cached client**, so the next request rebuilds
-  the session from the current environment rather than reusing one LinkedIn has
-  already rejected.
+- **A rejected session evicts the cached client**, so the next request rebuilds
+  from the current environment rather than reusing one LinkedIn has already
+  turned down. This covers all three of its forms: a `401`/`403`, a `200` whose
+  body carries an in-band `401`/`403` status, and a redirect loop into the
+  login page.
 
 ---
 
@@ -409,12 +411,13 @@ failure make detection *more* likely, not less.
   hosted deployment's environment variables) and restart the server. Anything
   built on top of this API needs to expect that outage.
 
-  Worth knowing: a stale session doesn't always surface as a clean `503`.
-  LinkedIn sometimes answers an unauthenticated Voyager call by redirecting to
-  the login page, which loops — `requests` gives up after 30 hops and the
-  service reports `502 LINKEDIN_UPSTREAM_ERROR` instead. Same root cause, same
-  fix. A redirect loop on *every* slug, including one you know doesn't exist,
-  is the tell: a working session returns `404` for a bad slug.
+  Worth knowing: an expired session doesn't always announce itself with a
+  `401`. LinkedIn often answers an unauthenticated Voyager call by redirecting
+  it to the login page, which then redirects onward until `requests` gives up
+  after 30 hops. The client catches that redirect loop and reports it as
+  `503 LINKEDIN_AUTH_FAILED` (with no `upstream_status`, since LinkedIn never
+  returned a real status) rather than letting it surface as an opaque `502`.
+  It also evicts the cached session, same as a `401` would.
 - **It violates LinkedIn's Terms of Service.** Educational/challenge use only —
   see the warning at the top.
 - **Account bans are a real risk.** LinkedIn detects automated Voyager traffic
